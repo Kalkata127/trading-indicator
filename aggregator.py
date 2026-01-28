@@ -42,7 +42,7 @@ class Aggregator:
 
     def __init__(self, output_dir="data/"):
         self.output_dir = output_dir
-        self.path_1h = os.path.join(output_dir, "1h.parquet")
+        #self.path_1h = os.path.join(output_dir, "1h.parquet")
         self.path_2h = os.path.join(output_dir, "2h.parquet")
 
     # Aggregate a 15m parquet file and update 1h/2h storage
@@ -56,13 +56,14 @@ class Aggregator:
 
         df_15m = df_15m.sort_index()
 
-        # Aggregate into 1H
+        """# Aggregate into 1H
         df_1h_new = aggregate_to_tf(df_15m, "1H")
         df_1h_existing = load_or_empty(self.path_1h)
 
         df_1h_merged = merge_and_deduplicate(df_1h_existing, df_1h_new)
         df_1h_merged.to_parquet(self.path_1h)
         print(f"[OK] Updated 1h.parquet → {len(df_1h_merged)} rows")
+        """
 
         # Aggregate into 2H
         df_2h_new = aggregate_to_tf(df_15m, "2h")
