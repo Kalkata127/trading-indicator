@@ -16,18 +16,53 @@ def add_emas(df,add_plots):
 def add_vector_candles(df,add_plots):
     marker_y = df["high"] * 1.001
     vector_y = marker_y.where(df["isVector"] == 1)
-    add_plots.append(mpf.make_addplot(vector_y, type = "scatter", marker = "v", markersize = 80, color = "yellow"))
+    if vector_y.count() > 0:
+        add_plots.append(mpf.make_addplot(vector_y, type = "scatter", marker = "v", markersize = 80, color = "yellow"))
 
-def add_sr(srs, add_plots):
-    pass #here will be logic for hlines SR
+def add_sr(sr_file_path, df, mpf_params):
+    if not os.path.exists(sr_file_path):
+        return
 
-def choose_style(vector,mpf):
-    if vector:
-        return mpf.make_mpf_style(base_mpf_style="nightclouds")
+    sr_df = pd.read_parquet(sr_file_path)
+    if sr_df.empty:
+        return
+
+    # Convert timestamp to object
+    sr_df["timestamp"] = pd.to_datetime(sr_df["timestamp"], utc=True)
+    last_timestamp = df.index[-1]
     
-    return mpf.make_mpf_style(
+    lines = []
+    colors = []
+    
+    for i in range(len(sr_df)):
+        start_time = sr_df["timestamp"].iloc[i]
+        price = sr_df["price"].iloc[i]
+        sr_type = sr_df["type"].iloc[i].lower()
+        
+        if start_time > last_timestamp:
+            continue
+            
+        # Add line to the end of plot
+        lines.append([(start_time, price), (last_timestamp, price)])
+        
+        color = "#00ff00" if sr_type == "support" else "#ff0000"
+        colors.append(color)
+
+    if lines:
+        mpf_params['alines'] = dict(
+            alines=lines,
+            colors=colors,
+            linewidths=1.2,
+            alpha=0.7
+        )
+
+def choose_style(vector,mpf_module):
+    if vector:
+        return mpf_module.make_mpf_style(base_mpf_style="nightclouds")
+    
+    return mpf_module.make_mpf_style(
         base_mpf_style="nightclouds",
-        marketcolors=mpf.make_marketcolors(
+        marketcolors=mpf_module.make_marketcolors(
             up="#26a69a",
             down="#ef5350",
             wick="white",
@@ -60,14 +95,10 @@ def plot_candles(
     if vector:
         add_vector_candles(df, add_plots)
     
-    srs = []
-    if sr:
-        add_sr(srs, add_plots)
 
     style = choose_style(vector, mpf)
 
-    mpf.plot(
-        df,
+    mpf_arguments = dict(
         type="candle",
         style=style,
         volume=volume,
@@ -77,21 +108,28 @@ def plot_candles(
         ylabel_lower="Volume",
         tight_layout=True,
     )
+
+    if sr:
+        add_sr(sr, df, mpf_arguments)
+
+    mpf.plot(df, **mpf_arguments) #unpacking dictionary
     plt.show()
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("file_path", type=str, help="Path to candles file.")
+    parser.add_argument("--file", type=str, required=True, help="Path to candles file.")      
     parser.add_argument("--title", type=str, help="Chart title.")
     parser.add_argument("--volume", action="store_true", help="Show volume.")
     parser.add_argument("--vector", action="store_true", help="Show vector candle markers.")
     parser.add_argument("--ema", action="store_true", help="Plot EMA50 and EMA200.")
     parser.add_argument("--sr", type=str, help="Path to SR parquet file")   
 
+    import sys
+    print(f"--- DEBUG: sys.argv е: {sys.argv} ---")
     args = parser.parse_args()
 
     plot_candles(
-            args.file_path, 
+            file_path=args.file, 
             vector=args.vector, 
             volume=args.volume, 
             title=args.title, 
