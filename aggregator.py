@@ -1,18 +1,53 @@
 import os
 import pandas as pd
+import argparse
+from datetime import datetime
 
-def load_or_empty(path):
-    """Load a parquet file if exists, otherwise return empty DataFrame."""
-    if os.path.exists(path):
-        return pd.read_parquet(path)
-    return pd.DataFrame()
+def get_interval(df):
+    if df.empty:
+        return None
+    
+    open_t = df["open_time"].iloc[0]
+    close_t = df["close_time"].iloc[0]
+
+    #timestamp is in miliseconds
+    diff_seconds = (close_t - open_t) / 1000 
+    diff_minutes = diff_seconds / 60
+    print(round(diff_minutes))
+    return round(diff_minutes)
 
 
-def aggregate_to_tf(df_15m: pd.DataFrame, tf="1h"):
-    if not isinstance(df_15m.index, pd.DatetimeIndex):
-        df_15m.index = pd.to_datetime(df_15m["timestamp"], utc=True)
+def aggregate_candles(input_file, output_dir="data/"):
+    if not os.path.exists(input_file):
+        print(f"[Error] File '{input_file}' not found!")
+        return
 
-    df = df_15m.resample(tf).agg({
+    try:
+        df = pd.read_parquet(input_file)
+    except Exception as e:
+        print(f"[Error] Failed reading file: {e}")
+        return
+
+    if df.empty:
+        print(f"[Warning] File '{input_file}' is empty.")
+        return
+
+    interval = get_interval(df)
+    if interval not in [15.0, 30.0]:
+        print(f"[Отказ] Интервалът е {interval} мин. Поддържат се само 15м или 30м.")
+        return
+
+    print(f"Aggregating {int(interval)}min to 2h...")
+
+    # Index prep
+    if "timestamp" in df.columns:
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        df.set_index("timestamp", inplace=True)
+    elif not isinstance(df.index, pd.DatetimeIndex):
+        # If is not column and index isnt timestamp, convert index
+        df.index = pd.to_datetime(df.index, utc=True)
+
+    df_2h = df.resample("2h").agg({
         "open": "first",
         "high": "max",
         "low": "min",
@@ -20,67 +55,25 @@ def aggregate_to_tf(df_15m: pd.DataFrame, tf="1h"):
         "volume": "sum"
     }).dropna()
 
-    df["timestamp"] = df.index
+    # Join to previous 2h.parquet if exists
+    output_path = os.path.join(output_dir, "2h.parquet")
+    if os.path.exists(output_path):
+        existing_df = pd.read_parquet(output_path)
+        existing_df.index = pd.to_datetime(existing_df.index, utc=True)
+        
+        # Copy, sort, remove duplicates
+        combined = pd.concat([existing_df, df_2h])
+        combined = combined[~combined.index.duplicated(keep="last")]
+        df_2h = combined.sort_index()
 
-    return df
-
-
-def merge_and_deduplicate(old_df, new_df):
-    if old_df is None or len(old_df) == 0:
-        return new_df
-
-    combined = pd.concat([old_df, new_df])
-
-    combined = combined.sort_index()
-
-    combined = combined[~combined.index.duplicated(keep="last")]
-
-    return combined
-
-
-class Aggregator:
-
-    def __init__(self, output_dir="data/"):
-        self.output_dir = output_dir
-        #self.path_1h = os.path.join(output_dir, "1h.parquet")
-        self.path_2h = os.path.join(output_dir, "2h.parquet")
-
-    # Aggregate a 15m parquet file and update 1h/2h storage
-    def process_15m_file(self, path_15m: str):
-        print(f"[INFO] Loading 15m file: {path_15m}")
-
-        df_15m = pd.read_parquet(path_15m)
-
-        if not isinstance(df_15m.index, pd.DatetimeIndex):
-            df_15m.index = pd.to_datetime(df_15m["timestamp"], utc=True)
-
-        df_15m = df_15m.sort_index()
-
-        """# Aggregate into 1H
-        df_1h_new = aggregate_to_tf(df_15m, "1H")
-        df_1h_existing = load_or_empty(self.path_1h)
-
-        df_1h_merged = merge_and_deduplicate(df_1h_existing, df_1h_new)
-        df_1h_merged.to_parquet(self.path_1h)
-        print(f"[OK] Updated 1h.parquet → {len(df_1h_merged)} rows")
-        """
-
-        # Aggregate into 2H
-        df_2h_new = aggregate_to_tf(df_15m, "2h")
-        df_2h_existing = load_or_empty(self.path_2h)
-
-        df_2h_merged = merge_and_deduplicate(df_2h_existing, df_2h_new)
-        df_2h_merged.to_parquet(self.path_2h)
-        print(f"[OK] Updated 2h.parquet → {len(df_2h_merged)} rows")
-
+    os.makedirs(output_dir, exist_ok=True)
+    df_2h.to_parquet(output_path)
+    print(f"Done '{output_path}' updated. Total rows: {len(df_2h)}")
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Aggregate 15m candles into 1h and 2h.")
-    parser.add_argument("--file", required=True, help="Path to a 15m parquet file")
-    parser.add_argument("--out", default="data/", help="Output directory")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--file", required=True, help="Path to input file")
+    parser.add_argument("--out", default="data/", help="Output folder")
     args = parser.parse_args()
 
-    agg = Aggregator(output_dir=args.out)
-    agg.process_15m_file(args.file)
+    aggregate_candles(args.file, args.out)

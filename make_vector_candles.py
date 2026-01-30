@@ -4,10 +4,6 @@ import argparse
 
 
 def calculate_vector_candles(input_file, lookback=10, threshold_volume_mult=2):
-    """
-    Reads raw input.parquet, calculates vector candles, and writes output to a new file in the same directory
-    with .candles.parquet suffix. Does not remove any existing columns.
-    """
     df = pd.read_parquet(input_file)
 
     if isinstance(df.index, pd.DatetimeIndex):
@@ -49,7 +45,7 @@ def calculate_vector_candles(input_file, lookback=10, threshold_volume_mult=2):
     print(f"Total vector candles detected: {df['isVector'].sum()}")
 
     output_dir = os.path.dirname(input_file)  # Get the directory from input_file path
-    output_file = os.path.join(output_dir, os.path.basename(input_file).replace('.parquet', '.candles.parquet'))
+    output_file = os.path.join(output_dir, os.path.basename(input_file).replace('.parquet', '.vector.parquet'))
 
     # Save to output parquet in the same directory as input file
     df.to_parquet(output_file, index=False)

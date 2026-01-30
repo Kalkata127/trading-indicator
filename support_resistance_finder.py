@@ -38,9 +38,15 @@ class SRFinder:
 
         df = pd.read_parquet(input_path)
         
-        if 'timestamp' not in df.columns and not isinstance(df.index, pd.DatetimeIndex):
-            print("Warning: No timestamp column found. Using index as time.")
+        if isinstance(df.index, pd.DatetimeIndex):
+            df = df.reset_index().rename(columns={df.index.name: 'timestamp', 'index': 'timestamp'})
+        
+        # If missing we create it
+        if 'timestamp' not in df.columns:
             df['timestamp'] = df.index
+
+        #Right format
+        df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
         
         levels_data = self.identify_sr_levels(df)
         
@@ -107,7 +113,7 @@ class SRFinder:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Identify Support and Resistance levels from OHLCV data.")
-    parser.add_argument("file", help="Path to the .parquet file")
+    parser.add_argument("--file", help="Path to the .parquet file")
     parser.add_argument("--out", default="data/", help="Output directory")
     parser.add_argument("--threshold", type=float, default=0.005, help="Merging threshold (default 0.5%)")
     args = parser.parse_args()

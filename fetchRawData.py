@@ -8,9 +8,9 @@ from enum import Enum
 import argparse
 
 INTERVAL_MAP = {
-    '1m': Client.KLINE_INTERVAL_1MINUTE,
-    '3m': Client.KLINE_INTERVAL_3MINUTE,
-    '5m': Client.KLINE_INTERVAL_5MINUTE,
+    #'1m': Client.KLINE_INTERVAL_1MINUTE,
+    #'3m': Client.KLINE_INTERVAL_3MINUTE,
+    #'5m': Client.KLINE_INTERVAL_5MINUTE,
     '15m': Client.KLINE_INTERVAL_15MINUTE,
     '30m': Client.KLINE_INTERVAL_30MINUTE,
     '1h': Client.KLINE_INTERVAL_1HOUR,
@@ -20,9 +20,9 @@ INTERVAL_MAP = {
     '8h': Client.KLINE_INTERVAL_8HOUR,
     '12h': Client.KLINE_INTERVAL_12HOUR,
     '1d': Client.KLINE_INTERVAL_1DAY,
-    '3d': Client.KLINE_INTERVAL_3DAY,
-    '1w': Client.KLINE_INTERVAL_1WEEK,
-    '1M': Client.KLINE_INTERVAL_1MONTH
+    #'3d': Client.KLINE_INTERVAL_3DAY,
+    #'1w': Client.KLINE_INTERVAL_1WEEK,
+    #'1M': Client.KLINE_INTERVAL_1MONTH
 }
 symbol = "BTCUSDT"
 interval = Client.KLINE_INTERVAL_15MINUTE
