@@ -8,7 +8,8 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "args": [
-                "--file", "data/BTCUSDC/15m_15D_14-01-2026_21-00-00___20-01-2026_01-45-00.vector.parquet",
+                "--file", "data/BTCUSDC/15m_30D_31-12-2025_19-00-00___05-01-2026_23-45-00.vector.parquet",
+                "--vector",
             ]
         }
     ]

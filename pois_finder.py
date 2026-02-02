@@ -2,50 +2,66 @@ import pandas as pd
 from collections import deque
 
 class POIFinder:
-    def __init__(self, volume_std_threshold=2.0, min_dist=15):
-        self.volume_std_threshold = volume_std_threshold
+    def __init__(self, min_dist=15):
         self.min_dist = min_dist
-        self.poi_stack = deque()  # LIFO queue
+        self.active_pois = []
 
-    def update_pois(self, df):
-        """
-        Scans DF for new big candles and cleans 'consumed' ones
-        """
-        # Calculate step for 'big' vector candle
-        # TODO: other method
-        avg_vol = df['volume'].mean()
-        std_vol = df['volume'].std()
-        threshold = avg_vol + (self.volume_std_threshold * std_vol)
+    def find_pois(self, df):        
+        if 'va' not in df.columns:
+            print("[Err] Column 'va' missing. Use first make_vector_candles.py.")
+            return None
 
-        significant_vectors = df[
-            (df['isVector'] == 1) & 
-            (df['volume'] > threshold)
-        ]
-
-        self.poi_stack.clear()
+        sig_indices = df[df['va'] == 1].index
         
-        for idx, row in significant_vectors.iterrows():
-            # TODO: Логика за групиране на последователни вектори в една POI зона
-            
-            poi = {
-                "timestamp": idx,
-                "price_high": row['high'],
-                "price_low": row['low'],
-                "type": "RED" if row['close'] < row['open'] else "GREEN",
-                "volume": row['volume']
-            }
-            self.poi_stack.append(poi)
+        if sig_indices.empty:
+            return None
 
-    def get_active_target(self, current_time):
-        for poi in reversed(self.poi_stack):
-            # Distance check (in candles or time)
-            dist = (current_time - poi['timestamp']).total_seconds() / 60 / 15 # 15min candels
+        temp_pois = []
+        # Find last vectors from groups
+        for i in range(len(sig_indices)):
+            current_idx = sig_indices[i]
+            is_last = True
             
-            if dist >= self.min_dist:
-                return poi
-        return None
+            if i + 1 < len(sig_indices):
+                pos_curr = df.index.get_loc(current_idx)
+                pos_next = df.index.get_loc(sig_indices[i+1])
+                # If the next Climax is right after the current, that means the current isn't last in group
+                if pos_next == pos_curr + 1:
+                    is_last = False
+            
+            if is_last:
+                row = df.loc[current_idx]
+                temp_pois.append({
+                    "timestamp": current_idx,
+                    "high": row['high'],
+                    "low": row['low'],
+                    "type": "RED" if row['close'] < row['open'] else "GREEN",
+                    "mitigated": False
+                })
 
-    def is_covered(self, poi, current_price):
-        if current_price <= poi['price_high'] and current_price >= poi['price_low']:
-            return True
-        return False
+        # Mitigation(Price coverage) logic
+        final_pois = []
+        for poi in temp_pois:
+            poi_start_time = poi['timestamp']
+            
+            # Get data after POI appear, to check if price returned there
+            post_poi_data = df[df.index > poi_start_time]
+            
+            if post_poi_data.empty:
+                # If this is the newest candle, its not covered yet
+                final_pois.append(poi)
+                continue
+
+            if poi['type'] == "RED":
+                is_hit = post_poi_data['high'].max() >= poi['low']
+            else:
+                is_hit = post_poi_data['low'].min() <= poi['high']
+            
+            if not is_hit:
+                final_pois.append(poi)
+
+        if not final_pois:
+            return None
+
+        self.active_pois = final_pois
+        return self.active_pois
