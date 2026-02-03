@@ -34,7 +34,7 @@ def aggregate_candles(input_file, output_dir="data/"):
 
     interval = get_interval(df)
     if interval not in [15.0, 30.0]:
-        print(f"[Отказ] Интервалът е {interval} мин. Поддържат се само 15м или 30м.")
+        print(f"Interval is {interval} min. Only 15min or 30min allowed.")
         return
 
     print(f"Aggregating {int(interval)}min to 2h...")

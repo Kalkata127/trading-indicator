@@ -3,7 +3,10 @@ import pandas as pd
 import mplfinance as mpf
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from matplotlib.patches import Rectangle
 from indicators import ema
+from pois_finder import POIFinder
 import os
 
 def add_emas(df,add_plots):
@@ -76,46 +79,36 @@ def add_sr(sr_file_path, df, mpf_params):
             alpha=0.7
         )
 
-def add_pois_to_plot(df, mpf_params):
-    from pois_finder import POIFinder
+def draw_poi_rectangles(ax, df, poi_df):
+    if poi_df is None or poi_df.empty:
+        return
+
+    last_ts_num = mdates.date2num(df.index[-1])
     
-    finder = POIFinder(min_dist=5)
-    active_pois = finder.find_pois(df)
-    print(active_pois)
-    if active_pois is None:
-        print("[Debug] No acvite pois")
-        return
-    if not active_pois:
-        print("[DEBUG] No active POIs found to plot.")
-        return
-
-    poi_lines = []
-    poi_colors = []
-    last_ts = df.index[-1]
-
-    for poi in active_pois:
-        # Check the price is float, not Series/Obj
-        price_level = float(poi['low'] if poi['type'] == "RED" else poi['high'])
+    for _, poi in poi_df.iterrows():
+        x_start = mdates.date2num(poi['timestamp'])
         
-        poi_lines.append([(poi['timestamp'], price_level), (last_ts, price_level)])
-        poi_colors.append("#a020f0") # Лилаво
-
-    if 'alines' in mpf_params:
-        existing = mpf_params['alines']
-        mpf_params['alines'] = dict(
-            alines = existing.get('alines', []) + poi_lines,
-            colors = existing.get('colors', []) + poi_colors,
-            linewidths = existing.get('linewidths', 1.2),
-            alpha = 0.8
+        # Right border
+        if poi['isCovered'] and pd.notna(poi['covered_timestamp']):
+            x_end = mdates.date2num(poi['covered_timestamp'])
+        else:
+            x_end = last_ts_num
+            
+        y_bottom = poi['zone_bottom']
+        height = poi['zone_top'] - poi['zone_bottom']
+        color = 'green' if poi['type'] == 'GREEN' else 'red'
+        
+        rect = Rectangle(
+            (x_start, y_bottom),
+            width=x_end - x_start,
+            height=height,
+            facecolor=color,
+            alpha=0.15 if poi['isCovered'] else 0.4,
+            edgecolor=color if not poi['isCovered'] else 'none',
+            linewidth=1,
+            zorder=0
         )
-    else:
-        mpf_params['alines'] = dict(
-            alines = poi_lines,
-            colors = poi_colors,
-            linewidths = 2.0,
-            alpha = 0.8
-        )
-    print(f"[DEBUG] Added {len(poi_lines)} POI lines to plot.")
+        ax.add_patch(rect)
 
 def choose_style(vector,mpf_module):
     if vector:
@@ -131,18 +124,31 @@ def choose_style(vector,mpf_module):
         )
     )
 
-def plot_candles(
-    file_path: str,*,vector: bool = False,volume: bool = False, title: str | None = None, ema: bool = False, 
-    sr: str | None = None) -> None:
-
+def files_ok(file_path, sr):
     if not os.path.exists(file_path):
-        print("Error: Candles file not found!")
-        return
+        print(f"Error: Candles file not found! {file_path}")
+        return 0
+    
     if sr and not os.path.exists(sr):
-        print(f"Error: SR File not found!")
+        print(f"Error: SR File not found! {sr}")
+    return 1
 
+def plot_candles(
+    file_path: str, *, 
+    vector: bool = False, 
+    volume: bool = False, 
+    title: str | None = None, 
+    ema: bool = False, 
+    sr: str | None = None,
+    pois_path: str | None = None
+) -> None:
+    
+    if not files_ok(file_path, sr):
+        return
+        
+    # Load and prep data
     df = pd.read_parquet(file_path)
-    df.set_index(pd.to_datetime(df["timestamp"], utc=True), inplace=True) #save for mplfinance
+    df.set_index(pd.to_datetime(df["timestamp"], utc=True), inplace=True)
 
     needed_cols = ["open", "high", "low", "close", "volume"]
     if "va" in df.columns:
@@ -150,16 +156,14 @@ def plot_candles(
     df = df[needed_cols].copy()
 
     add_plots = []
-
     if ema:
-        add_emas(df,add_plots)
+        add_emas(df, add_plots)
 
     if vector:
         add_vector_candles(df, add_plots)
-    
 
     style = choose_style(vector, mpf)
-
+    
     mpf_arguments = dict(
         type="candle",
         style=style,
@@ -167,16 +171,29 @@ def plot_candles(
         addplot=add_plots,
         title=(title or os.path.basename(file_path)),
         ylabel="Price",
-        ylabel_lower="Volume",
         tight_layout=True,
+        returnfig=True,      
+        show_nontrading=True 
     )
-    if vector:
-        add_pois_to_plot(df, mpf_arguments)
 
     if sr:
         add_sr(sr, df, mpf_arguments)
 
-    mpf.plot(df, **mpf_arguments) #unpacking dictionary
+    # Initial drawing
+    fig, axlist = mpf.plot(df, **mpf_arguments)
+
+    if vector and pois_path:
+        if os.path.exists(pois_path):
+            poi_df = pd.read_parquet(pois_path)
+            # Ensure right data format
+            poi_df['timestamp'] = pd.to_datetime(poi_df['timestamp'], utc=True)
+            if 'covered_timestamp' in poi_df.columns:
+                poi_df['covered_timestamp'] = pd.to_datetime(poi_df['covered_timestamp'], utc=True)
+            
+            draw_poi_rectangles(axlist[0], df, poi_df)
+        else:
+            print(f"Warning: POI file not found at {pois_path}")
+
     plt.show()
 
 def main():
@@ -186,20 +203,20 @@ def main():
     parser.add_argument("--volume", action="store_true", help="Show volume.")
     parser.add_argument("--vector", action="store_true", help="Enable vector analysis.")
     parser.add_argument("--ema", action="store_true", help="Plot EMA50 and EMA200.")
-    parser.add_argument("--sr", type=str, help="Path to SR parquet file")   
+    parser.add_argument("--sr", type=str, help="Path to SR parquet file.")   
+    parser.add_argument("--pois", type=str, help="Path to .pois.parquet file.") # НОВ АРГУМЕНТ
 
-    import sys
-    print(f"--- DEBUG: sys.argv е: {sys.argv} ---")
     args = parser.parse_args()
 
     plot_candles(
-            file_path=args.file, 
-            vector=args.vector, 
-            volume=args.volume, 
-            title=args.title, 
-            ema=args.ema, 
-            sr=args.sr
-        ) #pass as keyword args
+        file_path=args.file, 
+        vector=args.vector, 
+        volume=args.volume, 
+        title=args.title, 
+        ema=args.ema, 
+        sr=args.sr,
+        pois_path=args.pois
+    )
 
 if __name__ == "__main__":
     main()

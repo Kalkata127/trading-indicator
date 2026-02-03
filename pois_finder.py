@@ -1,67 +1,71 @@
 import pandas as pd
-from collections import deque
+import numpy as np
+import argparse
+import os
 
 class POIFinder:
-    def __init__(self, min_dist=15):
-        self.min_dist = min_dist
-        self.active_pois = []
+    def __init__(self, threshold_pct=0.0005):
+        self.threshold_pct = threshold_pct
 
-    def find_pois(self, df):        
-        if 'va' not in df.columns:
-            print("[Err] Column 'va' missing. Use first make_vector_candles.py.")
-            return None
+    def process(self, input_file):
+        df = pd.read_parquet(input_file)
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
+            df.index = df['timestamp']
 
-        sig_indices = df[df['va'] == 1].index
+        pois = []
+        # Taking only climax vectors
+        climax_candles = df[df['va'] == 1].copy()
         
-        if sig_indices.empty:
-            return None
+        print(f"Working on: {len(climax_candles)} potential zones...")
 
-        temp_pois = []
-        # Find last vectors from groups
-        for i in range(len(sig_indices)):
-            current_idx = sig_indices[i]
-            is_last = True
+        for ts, row in climax_candles.iterrows():
+            is_bull = row['close'] > row['open']
+            top = np.float64(row['high'])
+            bottom = np.float64(row['low'])
+            poi_type = 'GREEN' if is_bull else 'RED'
             
-            if i + 1 < len(sig_indices):
-                pos_curr = df.index.get_loc(current_idx)
-                pos_next = df.index.get_loc(sig_indices[i+1])
-                # If the next Climax is right after the current, that means the current isn't last in group
-                if pos_next == pos_curr + 1:
-                    is_last = False
+            is_covered = False
+            covered_ts = None
             
-            if is_last:
-                row = df.loc[current_idx]
-                temp_pois.append({
-                    "timestamp": current_idx,
-                    "high": row['high'],
-                    "low": row['low'],
-                    "type": "RED" if row['close'] < row['open'] else "GREEN",
-                    "mitigated": False
-                })
+            # Check in future (after curr candle)
+            future_data = df[df.index > ts]
+            
+            for f_ts, f_row in future_data.iterrows():
+                if is_bull:
+                    if f_row['low'] <= bottom * (1 + self.threshold_pct):
+                        is_covered = True
+                        covered_ts = f_ts
+                        break
+                else:
+                    if f_row['high'] >= top * (1 - self.threshold_pct):
+                        is_covered = True
+                        covered_ts = f_ts
+                        break
+            
+            pois.append({
+                'poi_id': f"{ts.timestamp()}_{poi_type}",
+                'timestamp': ts,
+                'zone_top': top,
+                'zone_bottom': bottom,
+                'type': poi_type,
+                'isCovered': is_covered,
+                'covered_timestamp': covered_ts
+            })
 
-        # Mitigation(Price coverage) logic
-        final_pois = []
-        for poi in temp_pois:
-            poi_start_time = poi['timestamp']
-            
-            # Get data after POI appear, to check if price returned there
-            post_poi_data = df[df.index > poi_start_time]
-            
-            if post_poi_data.empty:
-                # If this is the newest candle, its not covered yet
-                final_pois.append(poi)
-                continue
+        poi_df = pd.DataFrame(pois)
+        output_file = input_file.replace('.vector.parquet', '.pois.parquet')
+        poi_df.to_parquet(output_file, index=False)
+        print(f"Saved {len(poi_df)} zones in: {output_file}")
 
-            if poi['type'] == "RED":
-                is_hit = post_poi_data['high'].max() >= poi['low']
-            else:
-                is_hit = post_poi_data['low'].min() <= poi['high']
-            
-            if not is_hit:
-                final_pois.append(poi)
+def main():
+    parser = argparse.ArgumentParser(description="Generate POI zones from vector candles.")
+    parser.add_argument('input_file', type=str, help="Path to .vector.parquet file")
+    parser.add_argument('--threshold', type=float, default=0.0005, help="Mitigation threshold percentage")
+    args = parser.parse_args()
 
-        if not final_pois:
-            return None
+    finder = POIFinder(threshold_pct=args.threshold)
+    finder.process(args.input_file)
 
-        self.active_pois = final_pois
-        return self.active_pois
+if __name__ == "__main__":
+    main()
