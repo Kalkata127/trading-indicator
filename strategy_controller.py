@@ -2,102 +2,124 @@ import pandas as pd
 import numpy as np
 
 class StrategyController:
-    def __init__(self, df):
+    def __init__(self, df, pois_df, threshold_pct=0.0002):
         self.df = df
-        self.poi_stack = []
-        self.sr_levels = None
+        self.raw_pois = pois_df
+        self.threshold_pct = threshold_pct
 
-    def load_indicators(self):
-        if 'va' not in self.df.columns or 'ema50' not in self.df.columns:
-            pass
+    def get_dynamic_active_pois(self):
+        active = []
+        for _, poi in self.raw_pois.iterrows():
+            after_poi = self.df[self.df.index > poi['timestamp']]
+            if after_poi.empty:
+                active.append(poi)
+                continue
+            is_covered = False
+            if poi['type'] == 'GREEN':
+                if (after_poi['low'] <= poi['zone_bottom'] * (1 + self.threshold_pct)).any(): 
+                    is_covered = True
+            else:
+                if (after_poi['high'] >= poi['zone_top'] * (1 - self.threshold_pct)).any(): 
+                    is_covered = True
+            if not is_covered: 
+                active.append(poi)
+        return pd.DataFrame(active)
 
-        temp_stack = []
-        for i in range(len(self.df)):
-            row = self.df.iloc[i]
-            ts = self.df.index[i]
+    def run(self, min_rr=1.5):
+        if len(self.df) < 2: 
+            return {"status": "SKIP"}
+        
+        # id=1: Prev candle, 2: Current candle
+        prev = self.df.iloc[-2]  
+        curr = self.df.iloc[-1]  
+        
+        active_pois = self.get_dynamic_active_pois()
+        if active_pois.empty:
+            return {"status": "CANDIDATE", "msg": "No open POI zones."}
 
-            if row['va'] == 1:
-                new_poi = {
-                    "timestamp": ts,
-                    "high": row['high'],
-                    "low": row['low'],
-                    "type": "BULL" if row['close'] > row['open'] else "BEAR",
-                    "active": True
-                }
-                
-                if temp_stack and (ts - temp_stack[-1]['timestamp']).total_seconds() <= 900:
-                    temp_stack[-1] = new_poi
-                else:
-                    temp_stack.append(new_poi)
+        ema50 = curr['ema50']
+        current_price = curr['close']
+        is_prev_bull = prev['close'] > prev['open']
+        is_curr_bull = curr['close'] > curr['open']
 
-            for poi in temp_stack:
-                if not poi['active']: continue
-                
-                if poi['type'] == "BULL" and row['low'] <= poi['high']:
-                    poi['active'] = False
-                elif poi['type'] == "BEAR" and row['high'] >= poi['low']:
-                    poi['active'] = False
+        # --- REVERSAL ---
+        # Looking for reversal only if both candles are vector ones (va>0)
+        if prev.get('va', 0) > 0 and curr.get('va', 0) > 0:
 
-        self.poi_stack = temp_stack
-
-    def find_nearest_resistance(self, current_time, direction="SHORT"):
-
-        lookback = self.df.tail(20)
-        lookback = 35
-        if direction == "SHORT":
-            return lookback['high'].max()
-        else:
-            return lookback['low'].min()
-
-    def run(self, min_dist=15, min_rr=1.5, **kwargs):
-
-        if len(self.df) < 2:
-            return {"status": "NO_TRADE", "reason": "Insufficient data"}
-
-        last_candle = self.df.iloc[-1]
-        current_time = self.df.index[-1]
-
-        target_poi = next((p for p in self.poi_stack if p['active'] and p['type'] == "BULL"), None)
-
-        if not target_poi:
-            return {"status": "NO_TRADE", "reason": "No active POI magnet found"}
-
-        dist_candles = (current_time - target_poi['timestamp']).total_seconds() / 900
-        if dist_candles < min_dist:
-            return {"status": "NO_TRADE", "reason": f"Too close to POI ({int(dist_candles)} candles)"}
-
-        is_reversal = (last_candle['va'] == 1 and 
-                       last_candle['close'] < last_candle['open'] and 
-                       last_candle['close'] < last_candle['ema50'])
-
-
-        if is_reversal:
-            entry_price = last_candle['close']
-
-            tp_price = target_poi['zone_top'] 
+            # id 2 must be 30% bigger than id 1
+            is_reversal_vol = curr['volume'] >= (prev['volume'] * 1.3)
             
-            sl_price = self.find_nearest_resistance(current_time, "SHORT")
-            
-            if sl_price <= entry_price:
-                sl_price = entry_price * 1.005 
+            # 1. Bearish Reversal (SHORT): Green (id1) -> (bigger) Red (id2)
+            if is_prev_bull and not is_curr_bull and is_reversal_vol:
+                # Must be above ema
+                if current_price > ema50:
+                    target = active_pois[active_pois['type'] == 'GREEN'].sort_values('timestamp', ascending=False).head(1)
+                    if not target.empty:
+                        entry = current_price
+                        tp = target.iloc[0]['zone_bottom'] # Tp: Active green zone below
+                        sl = prev['close']  # SL: Green candle close (id=1)
+                        
+                        risk = abs(sl - entry)
+                        reward = abs(entry - tp)
+                        rr = reward / risk if risk > 0 else 0
+                        if rr >= min_rr:
+                            return {
+                                "status": "TRADE", 
+                                "type": "REVERSAL", 
+                                "direction": "SHORT", 
+                                "entry": entry, 
+                                "tp": tp, 
+                                "sl": sl, 
+                                "rr": rr,
+                                "start_ts": curr.name
+                            }
 
-            risk = sl_price - entry_price
-            reward = entry_price - tp_price
-            rr = round(reward / risk, 2) if risk > 0 else 0
+            # 2. Bullish Reversal (LONG): Red vector (id1) -> (Bigger) Green vector (id2)
+            if not is_prev_bull and is_curr_bull and is_reversal_vol:
+                # Must be under Ema
+                if current_price < ema50:
+                    target = active_pois[active_pois['type'] == 'RED'].sort_values('timestamp', ascending=False).head(1)
+                    if not target.empty:
+                        entry = current_price 
+                        tp = target.iloc[0]['zone_bottom'] # TP: Active red zone above
+                        sl = curr['open']  # SL: Green candle open (id=2)
+                        
+                        risk = abs(entry - sl)
+                        reward = abs(tp - entry)
+                        rr = reward / risk if risk > 0 else 0
+                        if rr >= min_rr:
+                            return {
+                                "status": "TRADE", 
+                                "type": "REVERSAL", 
+                                "direction": "LONG", 
+                                "entry": entry, 
+                                "tp": tp, 
+                                "sl": sl, 
+                                "rr": rr,
+                                "start_ts": curr.name
+                            }
 
-            if rr < min_rr:
-                return {"status": "NO_TRADE", "reason": f"RR too low ({rr})"}
+        # --- TREND FOLLOW ---
+        # Only if the previous candle is vector one (va>0)
+        if prev.get('va', 0) > 0:
+            # TREND SHORT (Bearish vector -> Continuation)
+            if not is_prev_bull:
+                target = active_pois[active_pois['type'] == 'GREEN'].sort_values('timestamp', ascending=False).head(1)
+                if not target.empty and current_price < ema50 and current_price < prev['close']:
+                    entry, tp = current_price, target.iloc[0]['zone_bottom']
+                    sl = self.df.iloc[-15:]['high'].max() # SR above local structure
+                    rr = abs(entry - tp) / abs(sl - entry) if abs(sl - entry) > 0 else 0
+                    if rr >= min_rr:
+                        return {"status": "TRADE", "type": "TREND", "direction": "SHORT", "entry": entry, "tp": tp, "sl": sl, "rr": rr, "start_ts": curr.name}
 
-            return {
-                "status": "TRADE",
-                "direction": "SHORT",
-                "entry": round(entry_price, 2),
-                "take_profit": round(tp_price, 2),
-                "stop_loss": round(sl_price, 2),
-                "rr": rr,
-                "strength": 6,
-                "reason": f"Reversal targeting POI from {target_poi['timestamp'].strftime('%Y-%m-%d %H:%M')}"
-            }
+            # TREND LONG (Bullish vector -> Continuation)
+            elif is_prev_bull:
+                target = active_pois[active_pois['type'] == 'RED'].sort_values('timestamp', ascending=False).head(1)
+                if not target.empty and current_price > ema50 and current_price > prev['close']:
+                    entry, tp = current_price, target.iloc[0]['zone_bottom']
+                    sl = self.df.iloc[-15:]['low'].min() # SR under local structure
+                    rr = abs(tp - entry) / abs(entry - sl) if abs(entry - sl) > 0 else 0
+                    if rr >= min_rr:
+                        return {"status": "TRADE", "type": "TREND", "direction": "LONG", "entry": entry, "tp": tp, "sl": sl, "rr": rr, "start_ts": curr.name}
 
-        return {"status": "NO_TRADE", "reason": "No reversal signal under EMA"}
-    
+        return {"status": "SKIP"}
