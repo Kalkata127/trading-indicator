@@ -106,3 +106,4 @@ if __name__ == "__main__":
         print(f"Error: Directory {base_data_path} not found!")
     else:
         run_backtest(base_data_path, args.interval, args.rr)
+    input()
