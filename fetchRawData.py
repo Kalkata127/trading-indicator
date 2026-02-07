@@ -1,87 +1,66 @@
 import os
-from binance.client import Client
+import time
 import pandas as pd
-from pathlib import Path
+from binance.client import Client
 from datetime import datetime, timezone
-import argparse
 
 INTERVAL_MAP = {
+    '5m': Client.KLINE_INTERVAL_5MINUTE,
     '15m': Client.KLINE_INTERVAL_15MINUTE,
     '30m': Client.KLINE_INTERVAL_30MINUTE,
-    '1h': Client.KLINE_INTERVAL_1HOUR,
-    '2h': Client.KLINE_INTERVAL_2HOUR,
-    '4h': Client.KLINE_INTERVAL_4HOUR,
-    '1d': Client.KLINE_INTERVAL_1DAY,
 }
 
-def get_binance_candles_fixed(symbol: str, interval: str, start_str: str, end_str: str) -> pd.DataFrame:
+def get_binance_candles_period(symbol: str, interval: str, start_dt: datetime, end_dt: datetime) -> pd.DataFrame:
     api_key = os.getenv("BINANCE_API_KEY")
     api_secret = os.getenv("BINANCE_API_SECRET")
     client = Client(api_key, api_secret)
 
-    #Parse data format DD-MM-YYYY:HH:mm to objects with time zone UTC
-    dt_start = datetime.strptime(start_str, '%d-%m-%Y:%H:%M').replace(tzinfo=timezone.utc)
-    dt_end = datetime.strptime(end_str, '%d-%m-%Y:%H:%M').replace(tzinfo=timezone.utc)
+    if interval not in INTERVAL_MAP:
+        raise ValueError(f"Unsupported interval: {interval}. Only: {list(INTERVAL_MAP.keys())}")
 
-    klines = client.get_klines(
-        symbol=symbol,
-        interval=interval,
-        startTime=int(dt_start.timestamp() * 1000),
-        endTime=int(dt_end.timestamp() * 1000)
-    )
+    binance_interval = INTERVAL_MAP[interval]
+    all_klines = []
+    
+    # Convert to miliseconds for Binance API
+    current_start = int(start_dt.timestamp() * 1000)
+    end_ts = int(end_dt.timestamp() * 1000)
 
-    if not klines:
-        raise ValueError("Binance API doesn't return data for this period.")
+    print(f"[*] Fetching {symbol} ({interval}) from {start_dt}...")
 
-    # Orginal colums
-    df = pd.DataFrame(klines, columns=[
+    while current_start < end_ts:
+        klines = client.get_klines(
+            symbol=symbol,
+            interval=binance_interval,
+            startTime=current_start,
+            endTime=end_ts,
+            limit=1000
+        )
+        
+        if not klines:
+            break
+            
+        all_klines.extend(klines)
+        
+        # Next starts is time of last candle close + 1ms
+        current_start = klines[-1][6] + 1
+        
+        # Pause for Rate Limit
+        if len(klines) == 1000:
+            time.sleep(0.1)
+
+    if not all_klines:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(all_klines, columns=[
         "open_time", "open", "high", "low", "close", "volume",
         "close_time", "quote_asset_volume", "number_of_trades",
         "taker_buy_volume", "taker_buy_quote_volume", "ignore"
     ])
 
-    # Data type conversion
     for col in ["open", "high", "low", "close", "volume"]:
         df[col] = df[col].astype(float)
 
-    df["timestamp"] = pd.to_datetime(df["open_time"], unit='ms')
+    df["timestamp"] = pd.to_datetime(df["open_time"], unit='ms', utc=True)
     df = df.set_index("timestamp")
-
-    return df
-
-def save_candles(df: pd.DataFrame, symbol: str, interval: str):
-    begTime_str = df.index[0].strftime('%d-%m-%Y_%H-%M-%S')
-    endTime_str = df.index[-1].strftime('%d-%m-%Y_%H-%M-%S')
-    
-    dir = Path("data") / symbol
-    dir.mkdir(parents=True, exist_ok=True)
-    
-    filename = f"{interval}_FIXED_{begTime_str}___{endTime_str}.parquet"
-    filepath = dir / filename
-    
-    df.to_parquet(filepath, compression='snappy')
-    print(f"File saved in: {filepath}")
-    return filepath
-
-def main():
-    parser = argparse.ArgumentParser(description="Fetch historical Binance candles for a fixed period.")
-    parser.add_argument('symbol', type=str, help="Trading pair (e.g., 'BTCUSDT')")
-    parser.add_argument('interval', type=str, help="Interval (e.g., '15m', '1h')")
-    parser.add_argument('start_time', type=str, help="Start time in format 'DD-MM-YYYY:HH:MM'")
-    parser.add_argument('end_time', type=str, help="End time in format 'DD-MM-YYYY:HH:MM'")
-
-    args = parser.parse_args()
-
-    if args.interval not in INTERVAL_MAP:
-        raise ValueError(f"Invalid interval. Supported: {', '.join(INTERVAL_MAP.keys())}")
-    
-    interval = INTERVAL_MAP[args.interval]
-
-    try:
-        df = get_binance_candles_fixed(args.symbol, interval, args.start_time, args.end_time)
-        save_candles(df, args.symbol, args.interval)
-    except Exception as e:
-        print(f"Error: {e}")
-
-if __name__ == "__main__":
-    main()
+    # Removing overlaps
+    return df[~df.index.duplicated(keep='last')]

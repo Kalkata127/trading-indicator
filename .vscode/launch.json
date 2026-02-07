@@ -7,10 +7,8 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
-            "args": [
-                "--vector", "./data/BTCUSDC/15m_FIXED_04-01-2026_19-15-00___08-01-2026_02-45-00.vector.parquet",
-                "--pois","./data/BTCUSDC/15m_FIXED_04-01-2026_19-15-00___08-01-2026_02-45-00.pois.parquet",
-                "--rr", "0.5",
+            "args": ["ETHUSDC", "live"
+                
             ]
         }
     ]
