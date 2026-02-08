@@ -27,6 +27,7 @@ Launch the system using the global command:
 ```
 trading-bot
 ```
+>```Or: python trading_indicator.py```
 ### Command Reference:
 ```
 Command	Syntax	Description
