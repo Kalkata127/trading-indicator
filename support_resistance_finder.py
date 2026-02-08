@@ -4,15 +4,8 @@ import argparse
 from indicators import ema
 from typing import List, Tuple, Optional
 
-def is_confirmed_momentum(
-    window: pd.DataFrame, 
-    vol_ema: pd.Series, 
-    trend: str = 'up'
-) -> Tuple[bool, Optional[float]]:
-    """
-    Checks 2 following candles with big volume
-    Returns (confirmed, price).
-    """
+def is_confirmed_momentum(window: pd.DataFrame, vol_ema: pd.Series, trend: str = 'up') -> Tuple[bool, Optional[float]]:
+    # Checks 2 following candles with big volume
     for j in range(len(window) - 1):
         c1, c2 = window.iloc[j], window.iloc[j+1]
         v_ema1, v_ema2 = vol_ema.iloc[j], vol_ema.iloc[j+1]

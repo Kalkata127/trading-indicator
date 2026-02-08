@@ -5,13 +5,13 @@ from datetime import datetime
 from strategy_controller import StrategyController
 from indicators import ema
 
-def check_current_market_state(symbol, mode, interval="15m", min_rr=1.5):
-    # 1. Setup paths
+def check_current_market_state(symbol: str, mode: str, interval: str = "15m", min_rr: float = 1.5) -> None:
+    # Setup paths
     base_path = Path("data") / symbol / mode
     vector_file = base_path / f"{interval}.vector.parquet"
     pois_file = base_path / f"{interval}.pois.parquet"
 
-    # 2. Check if required files exist
+    # Check if required files exist
     if not vector_file.exists():
         print(f"❌ Error: Vector file not found at {vector_file}")
         return
@@ -19,7 +19,7 @@ def check_current_market_state(symbol, mode, interval="15m", min_rr=1.5):
         print(f"❌ Error: POI file not found at {pois_file}")
         return
 
-    # 3. Load and prepare data
+    # Load and prepare data
     df = pd.read_parquet(vector_file)
     df.index = pd.to_datetime(df['timestamp'], utc=True)
     

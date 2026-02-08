@@ -1,8 +1,9 @@
 import os
 import pandas as pd
 import argparse
+from pathlib import Path
 
-def calculate_vector_candles(input_file, lookback=10):
+def calculate_vector_candles(input_file: Path, lookback: int = 10) -> None:
     df = pd.read_parquet(input_file)
     
     if 'ignore' in df.columns:

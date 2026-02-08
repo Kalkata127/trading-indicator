@@ -1,11 +1,12 @@
 import pandas as pd
 import argparse
-import os
 from pathlib import Path
 from strategy_controller import StrategyController
+import multiprocessing
+from typing import List, Dict, Any
 
-def simulate_exit(df, start_idx, sig):
-    """Checking future candles for hitting TP/SL."""
+def simulate_exit(df: pd.DataFrame, start_idx: int, sig: Dict[str, Any]) -> Dict[str, Any]:
+    """Checks future candles for hitting TP/SL using the full dataframe."""
     for j in range(start_idx + 1, len(df)):
         low, high, ts = df['low'].iloc[j], df['high'].iloc[j], df.index[j]
         if sig['direction'] == "SHORT":
@@ -16,56 +17,80 @@ def simulate_exit(df, start_idx, sig):
             if low <= sig['sl']: return {"outcome": "LOSS", "exit_ts": ts, "exit_price": sig['sl']}
     return {"outcome": "OPEN", "exit_ts": df.index[-1], "exit_price": df['close'].iloc[-1]}
 
-def run_backtest(base_path, interval, min_rr):
-    # Construct path to files in the folder
+def backtest_worker(start_idx: int, end_idx: int, df: pd.DataFrame, pois_df: pd.DataFrame, min_rr: float) -> List[Dict[str, Any]]:
+    """Worker function to process a specific chunk of the data."""
+    chunk_signals = []
+    for i in range(start_idx, end_idx):
+        current_ts = df.index[i]
+
+        df_slice = df.iloc[:i+1]
+        pois_slice = pois_df[pois_df['timestamp'] <= current_ts]
+        
+        controller = StrategyController(df_slice, pois_slice)
+        res = controller.run(min_rr=min_rr)
+
+        if res["status"] == "TRADE":
+            res["start_ts"] = current_ts
+            res.update(simulate_exit(df, i, res))
+            chunk_signals.append(res)
+            
+    return chunk_signals
+
+def run_backtest(base_path: Path, interval: str, min_rr: float) -> None:
     vector_file = base_path / f"{interval}.vector.parquet"
     pois_file = base_path / f"{interval}.pois.parquet"
 
-    if not vector_file.exists():
-        print(f"Error: Vector candle file {vector_file.name} not found in {base_path}!")
-        return
-    if not pois_file.exists():
-        print(f"Error: POI file {pois_file.name} not found in {base_path}!")
+    if not vector_file.exists() or not pois_file.exists():
+        print(f"Error: Required files not found in {base_path}!")
         return
 
-    # Load data
+    # Load data once in main process
     df = pd.read_parquet(vector_file)
     df.index = pd.to_datetime(df['timestamp'], utc=True)
-    # Calculate Ema
     df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
     
     pois_df = pd.read_parquet(pois_file)
     pois_df['timestamp'] = pd.to_datetime(pois_df['timestamp'], utc=True)
     
-    found_signals, active_trade_until = [], None
-
-    print(f"--- Backtesting {base_path.parent.name} | Mode: {base_path.name} ---")
+    total_candles = len(df)
+    start_point = 50
     
-    # Analysis start from 50th candle (for the EMA)
-    for i in range(50, len(df)):
-        current_ts = df.index[i]
-        
-        # Skip if we are in trade
-        if active_trade_until and current_ts <= active_trade_until:
-            continue
+    # Determine number of processes (CPU cores)
+    num_cores = multiprocessing.cpu_count()
+    chunk_size = (total_candles - start_point) // num_cores
+    
+    print(f"--- Parallel Backtesting {base_path.parent.name} | Mode: {base_path.name} ---")
+    print(f"[*] Using {num_cores} CPU cores for {total_candles} candles...")
 
-        df_slice = df.iloc[:i+1]
-        pois_slice = pois_df[pois_df['timestamp'] <= current_ts]
-        
-        # Inicializing controller with current data slice
-        controller = StrategyController(df_slice, pois_slice)
-        res = controller.run(min_rr=min_rr)
+    # Chunks prep
+    tasks = []
+    for n in range(num_cores):
+        s = start_point + n * chunk_size
+        e = s + chunk_size if n < num_cores - 1 else total_candles
+        tasks.append((s, e, df, pois_df, min_rr))
 
-        if res["status"] == "TRADE":
-            # Simulating exit in future
-            res.update(simulate_exit(df, i, res))
-            found_signals.append(res)
-            active_trade_until = res['exit_ts']
-            print(f"📍 {res['type']} {res['direction']} на {current_ts.strftime('%d-%m %H:%M')}")
+    # Execute in parallel
+    with multiprocessing.Pool(processes=num_cores) as pool:
+        results = pool.starmap(backtest_worker, tasks)
 
-    print_report(found_signals)
+    # Flatten the list of signals from all workers
+    all_raw_signals = [sig for chunk in results for sig in chunk]
+    
+    # --- FILTERING ---
+    all_raw_signals.sort(key=lambda x: x['start_ts'])
+    
+    final_signals = []
+    active_trade_until = None
+    
+    for sig in all_raw_signals:
+        if active_trade_until is None or sig['start_ts'] > active_trade_until:
+            final_signals.append(sig)
+            active_trade_until = sig['exit_ts']
+            print(f"📍 {sig['type']} {sig['direction']} на {sig['start_ts'].strftime('%d-%m %H:%M')}")
 
-def print_report(results):
+    print_report(final_signals)
+
+def print_report(results: List[Dict[str,Any]]) -> None:
     if not results:
         print("\nNo trades found for this period.")
         return
@@ -90,20 +115,21 @@ def print_report(results):
     print(f"Total: {len(results)} | Wins: {wins} | Losses: {len(results)-wins} | WIN RATE: {wr:.2f}%")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Backtester for crypto MM stategy")
-
-    parser.add_argument('symbol', type=str, help="Token name (ex. BTCUSDC)")
-    parser.add_argument('mode', type=str, help="Subfolder (live or backtest)")
-    parser.add_argument("--interval", type=str, default="15m", help="Interval (default 15m)")
-    parser.add_argument("--rr", type=float, default=1.5, help="Minimal Risk/Reward")
+    multiprocessing.freeze_support()
+    
+    parser = argparse.ArgumentParser(description="Parallel Backtester for crypto MM strategy")
+    parser.add_argument('symbol', type=str, help="Token name")
+    parser.add_argument('mode', type=str, help="Subfolder")
+    parser.add_argument("--interval", type=str, default="15m")
+    parser.add_argument("--rr", type=float, default=1.5)
 
     args = parser.parse_args()
-
-    # Making path to folder
     base_data_path = Path("data") / args.symbol / args.mode
     
     if not base_data_path.exists():
         print(f"Error: Directory {base_data_path} not found!")
     else:
         run_backtest(base_data_path, args.interval, args.rr)
+    
+    print("\nPress Enter to exit...")
     input()

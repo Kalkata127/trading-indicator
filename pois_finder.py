@@ -1,13 +1,13 @@
 import pandas as pd
 import numpy as np
 import argparse
-import os
+from pathlib import Path
 
 class POIFinder:
-    def __init__(self, threshold_pct=0.0005):
+    def __init__(self, threshold_pct: float = 0.0005) -> None:
         self.threshold_pct = threshold_pct
 
-    def process(self, input_file):
+    def process(self, input_file: Path) -> None:
         df = pd.read_parquet(input_file)
         if not isinstance(df.index, pd.DatetimeIndex):
             df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)

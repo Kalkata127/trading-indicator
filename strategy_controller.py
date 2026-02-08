@@ -1,13 +1,13 @@
 import pandas as pd
-import numpy as np
+from typing import Dict, Any
 
 class StrategyController:
-    def __init__(self, df, pois_df, threshold_pct=0.0002):
+    def __init__(self, df: pd.DataFrame, pois_df: pd.DataFrame, threshold_pct: float = 0.0002) -> None:
         self.df = df
         self.raw_pois = pois_df
         self.threshold_pct = threshold_pct
 
-    def get_dynamic_active_pois(self):
+    def get_dynamic_active_pois(self) -> pd.DataFrame:
         active = []
         for _, poi in self.raw_pois.iterrows():
             after_poi = self.df[self.df.index > poi['timestamp']]
@@ -25,7 +25,7 @@ class StrategyController:
                 active.append(poi)
         return pd.DataFrame(active)
 
-    def run(self, min_rr=1.5):
+    def run(self, min_rr: float = 1.5) -> Dict[str, Any]:
         if len(self.df) < 2: 
             return {"status": "SKIP"}
         

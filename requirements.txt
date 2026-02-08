@@ -1,0 +1,7 @@
+pandas
+mplfinance
+matplotlib
+numpy
+python-binance
+pyarrow
+fastparquet

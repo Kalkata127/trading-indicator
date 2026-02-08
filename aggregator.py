@@ -1,9 +1,9 @@
 import os
 import pandas as pd
 import argparse
-from datetime import datetime
+from pathlib import Path
 
-def get_interval(df):
+def get_interval(df: pd.DataFrame) -> str:
     if df.empty:
         return None
     
@@ -13,7 +13,7 @@ def get_interval(df):
     
     return None
 
-def aggregate_candles(input_file, output_dir):
+def aggregate_candles(input_file: Path, output_dir: Path) -> None:
     if not os.path.exists(input_file):
         print(f"[Error] Input file '{input_file}' not found!")
         return
