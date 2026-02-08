@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crypto-trading-analysis"
+version = "1.0.0"
+description = "Easy to use crypto trading indicator, based on the MM(Market Maker) strategy. Works with any cryptocurrency provided by Binance API."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Kalin Simeonov" }
+]
+keywords = ["crypto", "trading", "binance"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "mplfinance>=0.12.9b0",
+    "binance-connector>=3.0.0",
+    "pyarrow>=12.0.0",         
+    "fastparquet>=2023.4.0",  
+    "matplotlib>=3.7.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "unittest-xml-reporting",
+]
+
+[tool.setuptools]
+packages = ["."]
+
+[tool.black]
+line-length = 100
+target-version = ['py310']
+
+[project.scripts]
+trading-bot = "trading_indicator:main"
